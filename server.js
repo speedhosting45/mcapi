@@ -22,7 +22,7 @@ const checkApiKey = (req, res, next) => {
 app.use('/api', checkApiKey, require('./routes'));
 
 // Start server
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Minecraft Deploy API running on port ${PORT}`);
   console.log(`Base directory: ${process.env.MINECRAFT_BASE_DIR}`);
