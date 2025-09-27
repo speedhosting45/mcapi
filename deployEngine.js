@@ -319,19 +319,33 @@ echo "Server stopped or crashed"
     }
   }
 
-  async stopServer(serverId) {
+ async stopServer(serverId) {
     try {
-      const serverDir = path.join(this.baseDir, serverId);
-      const pidFile = path.join(serverDir, 'server.pid');
-      const pid = await fs.readFile(pidFile, 'utf8');
-      await execAsync(`kill ${pid.trim()}`);
-      this.activeServers.delete(serverId);
-      console.log(`⏹️ Stopped server: ${serverId}`);
-      return true;
+        const serverDir = path.join(this.baseDir, serverId);
+        
+        // Method 1: Try to kill using PID file
+        try {
+            const pidFile = path.join(serverDir, 'server.pid');
+            const pid = await fs.readFile(pidFile, 'utf8');
+            console.log(`Stopping server ${serverId} with PID: ${pid.trim()}`);
+            await execAsync(`kill ${pid.trim()}`);
+        } catch (pidError) {
+            // Method 2: If no PID file, kill by process name
+            console.log('No PID file found, killing by process name...');
+            await execAsync(`pkill -f "server.jar" || true`);
+        }
+        
+        // Method 3: Kill any screen session with this name
+        await execAsync(`screen -S ${serverId} -X quit || true`);
+        
+        this.activeServers.delete(serverId);
+        console.log(`✅ Stopped server: ${serverId}`);
+        return true;
     } catch (error) {
-      return false;
+        console.error(`❌ Failed to stop server ${serverId}:`, error);
+        return false;
     }
-  }
+}
 
   async deleteServer(serverId) {
     try {
