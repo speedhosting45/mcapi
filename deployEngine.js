@@ -77,18 +77,35 @@ class DeployEngine {
     }
 
     async getDownloadUrl(edition, version) {
-        const urls = {
-            'paper-1.20.1': 'https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar',
-            'vanilla-1.20.1': 'https://piston-data.mojang.com/v1/objects/15c777e2cfe0556eef19aab534b186c0c6f277e1/server.jar',
-            'fabric-1.20.1': 'https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.15.7/0.12.3/server/jar',
-            'forge-1.20.1': 'https://maven.minecraftforge.net/net/minecraftforge/forge/1.20.1-47.2.0/forge-1.20.1-47.2.0-installer.jar'
-        };
+    const urls = {
+        // Paper URLs
+        'paper-1.21.1': 'https://api.papermc.io/v2/projects/paper/versions/1.21.1/builds/133/downloads/paper-1.21.1-133.jar',
+        'paper-1.21': 'https://api.papermc.io/v2/projects/paper/versions/1.21/builds/130/downloads/paper-1.21-130.jar',
+        'paper-1.20.1': 'https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar',
         
-        const key = `${edition}-${version}`;
-        if (urls[key]) return urls[key];
-        throw new Error(`Unsupported edition/version: ${edition} ${version}`);
+        // Vanilla URLs
+        'vanilla-1.21.1': 'https://piston-data.mojang.com/v1/objects/5b868151bd02b41319f54c8d4061b8cae84e664c/server.jar',
+        'vanilla-1.21': 'https://piston-data.mojang.com/v1/objects/51c9b061ad06682e6e8b3b8df5bb6edac8130a0a/server.jar',
+        'vanilla-1.20.1': 'https://piston-data.mojang.com/v1/objects/15c777e2cfe0556eef19aab534b186c0c6f277e1/server.jar',
+        
+        // Fabric URLs
+        'fabric-1.21.1': 'https://meta.fabricmc.net/v2/versions/loader/1.21.1/0.15.7/0.12.3/server/jar',
+        'fabric-1.21': 'https://meta.fabricmc.net/v2/versions/loader/1.21/0.15.7/0.12.3/server/jar',
+        'fabric-1.20.1': 'https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.15.7/0.12.3/server/jar',
+        
+        // Forge URLs
+        'forge-1.21.1': 'https://maven.minecraftforge.net/net/minecraftforge/forge/1.21.1-48.0.1/forge-1.21.1-48.0.1-installer.jar',
+        'forge-1.21': 'https://maven.minecraftforge.net/net/minecraftforge/forge/1.21-48.0.0/forge-1.21-48.0.0-installer.jar',
+        'forge-1.20.1': 'https://maven.minecraftforge.net/net/minecraftforge/forge/1.20.1-47.2.0/forge-1.20.1-47.2.0-installer.jar'
+    };
+    
+    const key = `${edition}-${version}`;
+    if (urls[key]) {
+        return urls[key];
     }
-
+    
+    throw new Error(`Unsupported edition/version: ${edition} ${version}. Available: ${Object.keys(urls).join(', ')}`);
+}
     async findAvailablePort() {
         for (let port = this.portStart; port <= this.portEnd; port++) {
             if (await this.isPortAvailable(port)) return port;
