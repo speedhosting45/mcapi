@@ -104,29 +104,31 @@ class DeployEngine {
         });
     }
 
-    async getDownloadUrl(edition, version) {
-        const urls = {
-            // Paper URLs
-            'paper-1.21': 'https://api.papermc.io/v2/projects/paper/versions/1.21/builds/130/downloads/paper-1.21-130.jar',
-            'paper-1.20.1': 'https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar',
-            
-            // Vanilla URLs
-            'vanilla-1.21': 'https://piston-data.mojang.com/v1/objects/51c9b061ad06682e6e8b3b8df5bb6edac8130a0a/server.jar',
-            'vanilla-1.20.1': 'https://piston-data.mojang.com/v1/objects/15c777e2cfe0556eef19aab534b186c0c6f277e1/server.jar',
-            
-            // Fabric URLs
-            'fabric-1.21': 'https://meta.fabricmc.net/v2/versions/loader/1.21/0.15.7/0.15.7/server/jar',
-            'fabric-1.20.1': 'https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.15.7/0.15.7/server/jar'
-        };
+   async getDownloadUrl(edition, version) {
+    const urls = {
+        // Fabric URLs
+        'fabric-1.21.1': 'https://meta.fabricmc.net/v2/versions/loader/1.21.1/0.15.7/0.15.7/server/jar',
+        'fabric-1.21': 'https://meta.fabricmc.net/v2/versions/loader/1.21/0.15.7/0.15.7/server/jar',
+        'fabric-1.20.1': 'https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.15.7/0.15.7/server/jar',
         
-        const key = `${edition}-${version}`;
-        if (urls[key]) {
-            return urls[key];
-        }
+        // Paper URLs
+        'paper-1.21.1': 'https://api.papermc.io/v2/projects/paper/versions/1.21.1/builds/306/downloads/paper-1.21.1-306.jar',
+        'paper-1.21': 'https://api.papermc.io/v2/projects/paper/versions/1.21/builds/306/downloads/paper-1.21-306.jar',
+        'paper-1.20.1': 'https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar',
         
-        throw new Error(`Unsupported edition/version: ${edition} ${version}`);
+        // Vanilla URLs
+        'vanilla-1.21.1': 'https://piston-data.mojang.com/v1/objects/5b868151bd02b41319f54c8d4061b8cae84e664c/server.jar',
+        'vanilla-1.21': 'https://piston-data.mojang.com/v1/objects/51c9b061ad06682e6e8b3b8df5bb6edac8130a0a/server.jar',
+        'vanilla-1.20.1': 'https://piston-data.mojang.com/v1/objects/15c777e2cfe0556eef19aab534b186c0c6f277e1/server.jar'
+    };
+    
+    const key = `${edition}-${version}`;
+    if (urls[key]) {
+        return urls[key];
     }
-
+    
+    throw new Error(`Unsupported edition/version: ${edition} ${version}`);
+}
     async downloadFile(url, filePath) {
         const response = await axios({
             method: 'GET',
