@@ -76,58 +76,72 @@ class DeployEngine {
         }
     }
 
-async getDownloadUrl(edition, version) {
-    const urls = {
-        // Fabric URLs - using simpler direct approach
-        'fabric-1.21': 'https://meta.fabricmc.net/v2/versions/loader/1.21/0.15.7/0.15.7/server/jar',
-        'fabric-1.21.1': 'https://meta.fabricmc.net/v2/versions/loader/1.21.1/0.15.7/0.15.7/server/jar',
-        'fabric-1.20.1': 'https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.15.7/0.15.7/server/jar',
-        
-        // Alternative: Use the installer which is more reliable
-        'fabric-installer-1.21': 'https://meta.fabricmc.net/v2/versions/loader/1.21/0.15.7/0.15.7/profile/json',
-        
-        // Paper URLs (as backup)
-        'paper-1.21': 'https://api.papermc.io/v2/projects/paper/versions/1.21/builds/130/downloads/paper-1.21-130.jar',
-        'paper-1.20.1': 'https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar',
-        
-        // Vanilla URLs
-        'vanilla-1.21': 'https://piston-data.mojang.com/v1/objects/51c9b061ad06682e6e8b3b8df5bb6edac8130a0a/server.jar'
-    };
-    
-    const key = `${edition}-${version}`;
-    if (urls[key]) {
-        return urls[key];
+    async findAvailablePort() {
+        for (let port = this.portStart; port <= this.portEnd; port++) {
+            if (await this.isPortAvailable(port)) {
+                return port;
+            }
+        }
+        throw new Error('No available ports found');
     }
-    
-    // If Fabric fails, try Paper as fallback
-    const paperKey = `paper-${version}`;
-    if (urls[paperKey]) {
-        console.log(`Fabric ${version} not available, using Paper instead`);
-        return urls[paperKey];
-    }
-    
-    throw new Error(`Unsupported edition/version: ${edition} ${version}`);
-}
 
     async isPortAvailable(port) {
         return new Promise((resolve) => {
             const net = require('net');
             const tester = net.createServer();
-            tester.once('error', () => resolve(false));
-            tester.once('listening', () => {
-                tester.close(() => resolve(true));
+            
+            tester.once('error', (err) => {
+                resolve(false);
             });
+            
+            tester.once('listening', () => {
+                tester.close(() => {
+                    resolve(true);
+                });
+            });
+            
             tester.listen(port, '0.0.0.0');
         });
     }
 
+    async getDownloadUrl(edition, version) {
+        const urls = {
+            // Paper URLs
+            'paper-1.21': 'https://api.papermc.io/v2/projects/paper/versions/1.21/builds/130/downloads/paper-1.21-130.jar',
+            'paper-1.20.1': 'https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar',
+            
+            // Vanilla URLs
+            'vanilla-1.21': 'https://piston-data.mojang.com/v1/objects/51c9b061ad06682e6e8b3b8df5bb6edac8130a0a/server.jar',
+            'vanilla-1.20.1': 'https://piston-data.mojang.com/v1/objects/15c777e2cfe0556eef19aab534b186c0c6f277e1/server.jar',
+            
+            // Fabric URLs
+            'fabric-1.21': 'https://meta.fabricmc.net/v2/versions/loader/1.21/0.15.7/0.15.7/server/jar',
+            'fabric-1.20.1': 'https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.15.7/0.15.7/server/jar'
+        };
+        
+        const key = `${edition}-${version}`;
+        if (urls[key]) {
+            return urls[key];
+        }
+        
+        throw new Error(`Unsupported edition/version: ${edition} ${version}`);
+    }
+
     async downloadFile(url, filePath) {
-        const response = await axios({ method: 'GET', url, responseType: 'stream', timeout: 120000 });
+        const response = await axios({
+            method: 'GET',
+            url: url,
+            responseType: 'stream',
+            timeout: 120000
+        });
+
         const writer = require('fs').createWriteStream(filePath);
         response.data.pipe(writer);
+
         return new Promise((resolve, reject) => {
             writer.on('finish', resolve);
             writer.on('error', reject);
+            response.data.on('error', reject);
         });
     }
 
@@ -158,6 +172,19 @@ java -Xmx${config.ram}G -Xms1G -jar server.jar nogui
 `;
         await fs.writeFile(path.join(serverDir, 'start.sh'), startScript);
         await fs.chmod(path.join(serverDir, 'start.sh'), 0o755);
+    }
+
+    async installForge(serverDir) {
+        try {
+            await execAsync(`cd "${serverDir}" && java -jar server.jar --installServer`);
+            const files = await fs.readdir(serverDir);
+            const forgeJar = files.find(f => f.includes('forge') && f.endsWith('.jar') && !f.includes('installer'));
+            if (forgeJar) {
+                await fs.rename(path.join(serverDir, forgeJar), path.join(serverDir, 'server.jar'));
+            }
+        } catch (error) {
+            throw new Error(`Forge installation failed: ${error.message}`);
+        }
     }
 
     async firstTimeSetup(serverDir, ram) {
@@ -210,121 +237,26 @@ java -Xmx${config.ram}G -Xms1G -jar server.jar nogui
     }
 
     async stopServer(serverId) {
-    try {
-        console.log(`🛑 Attempting to stop server: ${serverId}`);
-        
-        const serverDir = path.join(this.baseDir, serverId);
-        
-        // Method 1: Try gentle kill first
         try {
-            const pidFile = path.join(serverDir, 'server.pid');
-            const pid = await fs.readFile(pidFile, 'utf8');
-            const cleanPid = pid.trim();
+            const serverDir = path.join(this.baseDir, serverId);
             
-            if (cleanPid) {
-                console.log(`Sending TERM signal to PID: ${cleanPid}`);
-                process.kill(parseInt(cleanPid), 'SIGTERM');
-                
-                // Wait for graceful shutdown
-                await new Promise(resolve => setTimeout(resolve, 5000));
-                
-                // Check if process is still running
-                try {
-                    process.kill(parseInt(cleanPid), 0);
-                    console.log('Process still running, sending KILL signal');
-                    process.kill(parseInt(cleanPid), 'SIGKILL');
-                } catch (e) {
-                    console.log('Process terminated successfully');
-                }
+            // Try PID file first
+            try {
+                const pid = await fs.readFile(path.join(serverDir, 'server.pid'), 'utf8');
+                await execAsync(`kill ${pid.trim()}`);
+            } catch (pidError) {
+                // Kill by process name
+                await execAsync(`pkill -f "server.jar" || true`);
             }
-        } catch (pidError) {
-            console.log('No PID file found');
-        }
-        
-        // Method 2: Use child_process.exec with proper error handling
-        try {
-            console.log('Killing Java processes...');
-            await this.safeExec('pkill -f "java.*server.jar"');
-        } catch (e) {
-            console.log('No Java processes found or error killing');
-        }
-        
-        // Method 3: Kill by port
-        try {
-            const port = await this.getServerPort(serverDir);
-            console.log(`Killing process on port ${port}`);
-            await this.safeExec(`fuser -k ${port}/tcp 2>/dev/null`);
-        } catch (e) {
-            console.log('No process found on port');
-        }
-        
-        // Method 4: Use killall as alternative
-        try {
-            await this.safeExec('killall java 2>/dev/null || true');
-        } catch (e) {
-            console.log('killall command failed or no processes found');
-        }
-        
-        // Wait for processes to terminate
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        
-        // Check if server is actually stopped
-        const isRunning = await this.isServerRunning(serverId);
-        
-        if (!isRunning) {
+            
             this.activeServers.delete(serverId);
-            console.log(`✅ Successfully stopped server: ${serverId}`);
+            console.log(`✅ Stopped server: ${serverId}`);
             return true;
-        } else {
-            console.log(`⚠️ Server might still be running`);
+        } catch (error) {
+            console.error(`❌ Failed to stop server ${serverId}:`, error);
             return false;
         }
-        
-    } catch (error) {
-        console.error(`❌ Error stopping server:`, error.message);
-        return false;
     }
-}
-
-// Safe execution method that handles signals properly
-async safeExec(command) {
-    return new Promise((resolve, reject) => {
-        const child = require('child_process').exec(command, (error, stdout, stderr) => {
-            if (error) {
-                // Ignore "no process found" errors
-                if (error.code === 1 || error.signal === 'SIGTERM') {
-                    resolve({ stdout, stderr });
-                } else {
-                    reject(error);
-                }
-            } else {
-                resolve({ stdout, stderr });
-            }
-        });
-        
-        // Handle process termination
-        process.on('SIGTERM', () => {
-            child.kill('SIGTERM');
-        });
-    });
-}
-
-async isServerRunning(serverId) {
-    try {
-        // Check if any Java process is running
-        const { stdout } = await execAsync('ps aux | grep "java" | grep -v grep | wc -l');
-        const javaCount = parseInt(stdout.trim());
-        
-        // Check if our specific server directory has an active process
-        const serverDir = path.join(this.baseDir, serverId);
-        const { stdout: serverStdout } = await execAsync(`ps aux | grep "${serverDir}" | grep -v grep | wc -l`);
-        const serverProcessCount = parseInt(serverStdout.trim());
-        
-        return javaCount > 0 || serverProcessCount > 0;
-    } catch (error) {
-        return false;
-    }
-}
 
     async deleteServer(serverId) {
         try {
