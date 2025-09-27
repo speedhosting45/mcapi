@@ -21,6 +21,9 @@ class DeployEngine {
     try {
       console.log(`🚀 Starting deployment: ${serverId} (${edition} ${version})`);
 
+      // Check if Java is installed
+      await this.checkJavaInstallation();
+
       // Create server directory
       const serverDir = path.join(this.baseDir, serverId);
       await fs.mkdir(serverDir, { recursive: true });
@@ -88,6 +91,15 @@ class DeployEngine {
         error: error.message,
         message: 'Deployment failed' 
       };
+    }
+  }
+
+  async checkJavaInstallation() {
+    try {
+      const { stdout } = await execAsync('java -version');
+      console.log('✅ Java is installed:', stdout.split('\n')[0]);
+    } catch (error) {
+      throw new Error('Java is not installed. Please install OpenJDK 17: sudo apt install openjdk-17-jdk');
     }
   }
 
@@ -237,6 +249,10 @@ echo "Server stopped or crashed"
       }
       
       if (logContent.includes('ERROR') || logContent.includes('Failed')) {
+        // Check for specific errors
+        if (logContent.includes('java: not found') || logContent.includes('No such file or directory')) {
+          throw new Error('Java is not installed. Please install OpenJDK 17.');
+        }
         throw new Error('Server startup failed. Check server.log for errors.');
       }
       
