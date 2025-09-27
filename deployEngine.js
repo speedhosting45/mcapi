@@ -236,28 +236,93 @@ java -Xmx${config.ram}G -Xms1G -jar server.jar nogui
         });
     }
 
-    async stopServer(serverId) {
+   async stopServer(serverId) {
+    try {
+        console.log(`🛑 Attempting to stop server: ${serverId}`);
+        
+        const serverDir = path.join(this.baseDir, serverId);
+        
+        // Method 1: Try using PID file with process.kill (safer)
         try {
-            const serverDir = path.join(this.baseDir, serverId);
+            const pidFile = path.join(serverDir, 'server.pid');
+            const pid = await fs.readFile(pidFile, 'utf8');
+            const cleanPid = pid.trim();
             
-            // Try PID file first
-            try {
-                const pid = await fs.readFile(path.join(serverDir, 'server.pid'), 'utf8');
-                await execAsync(`kill ${pid.trim()}`);
-            } catch (pidError) {
-                // Kill by process name
-                await execAsync(`pkill -f "server.jar" || true`);
+            if (cleanPid) {
+                console.log(`Stopping process with PID: ${cleanPid}`);
+                try {
+                    process.kill(parseInt(cleanPid), 'SIGTERM');
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                    
+                    // Check if still running
+                    try {
+                        process.kill(parseInt(cleanPid), 0);
+                        // Still running, force kill
+                        process.kill(parseInt(cleanPid), 'SIGKILL');
+                    } catch (e) {
+                        // Process already dead
+                    }
+                } catch (e) {
+                    console.log('Process already terminated');
+                }
             }
-            
+        } catch (pidError) {
+            console.log('No PID file found');
+        }
+        
+        // Method 2: Use kill command directly (avoid pkill issues)
+        try {
+            await execAsync('killall java 2>/dev/null || true', { timeout: 5000 });
+        } catch (e) {
+            // Ignore errors
+        }
+        
+        // Method 3: Kill by port
+        try {
+            const port = await this.getServerPort(serverDir);
+            await execAsync(`fuser -k ${port}/tcp 2>/dev/null || true`, { timeout: 5000 });
+        } catch (e) {
+            // Ignore errors
+        }
+        
+        // Wait for processes to terminate
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        
+        // Check if server is actually stopped
+        const isRunning = await this.isServerRunning(serverId);
+        
+        if (!isRunning) {
             this.activeServers.delete(serverId);
-            console.log(`✅ Stopped server: ${serverId}`);
+            console.log(`✅ Successfully stopped server: ${serverId}`);
             return true;
-        } catch (error) {
-            console.error(`❌ Failed to stop server ${serverId}:`, error);
+        } else {
+            console.log(`❌ Server ${serverId} might still be running`);
             return false;
         }
+        
+    } catch (error) {
+        console.error(`❌ Error stopping server ${serverId}:`, error.message);
+        return false;
     }
+}
 
+async isServerRunning(serverId) {
+    try {
+        const serverDir = path.join(this.baseDir, serverId);
+        const port = await this.getServerPort(serverDir);
+        
+        // Check if port is in use
+        const portAvailable = await this.isPortAvailable(port);
+        
+        // Check if Java process is running for this server
+        const { stdout } = await execAsync(`ps aux | grep "java" | grep "${serverDir}" | grep -v grep | wc -l`);
+        const processCount = parseInt(stdout.trim());
+        
+        return !portAvailable || processCount > 0;
+    } catch (error) {
+        return false;
+    }
+}
     async deleteServer(serverId) {
         try {
             await this.stopServer(serverId);
