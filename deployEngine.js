@@ -27,6 +27,7 @@ class DeployEngine {
 
       // Allocate port
       const port = await this.findAvailablePort();
+      console.log(`📍 Allocated port: ${port}`);
       
       // Get download URL
       const downloadUrl = await this.getDownloadUrl(edition, version);
@@ -48,8 +49,11 @@ class DeployEngine {
         await this.installForge(serverDir);
       }
 
-      // Start server using nohup instead of screen
-      await this.startServer(serverDir, serverId, ram);
+      // First run - accept EULA and generate world
+      await this.firstTimeSetup(serverDir, serverId, ram);
+
+      // Start server
+      await this.startServer(serverDir, serverId, ram, port);
 
       const serverInfo = {
         serverId,
@@ -88,67 +92,62 @@ class DeployEngine {
   }
 
   async getDownloadUrl(edition, version) {
-    switch (edition) {
-      case 'paper':
-        return `https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar`;
-
-      case 'vanilla':
-        const vanillaResponse = await axios.get('https://launchermeta.mojang.com/mc/game/version_manifest.json');
-        const versionInfo = vanillaResponse.data.versions.find(v => v.id === version);
-        const versionDetail = await axios.get(versionInfo.url);
-        return versionDetail.data.downloads.server.url;
-
-      case 'fabric':
-        return `https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.15.7/0.12.3/server/jar`;
-
-      case 'forge':
-        return `https://maven.minecraftforge.net/net/minecraftforge/forge/1.20.1-47.2.0/forge-1.20.1-47.2.0-installer.jar`;
-
-      default:
-        throw new Error(`Unsupported edition: ${edition}`);
+    // Use direct URLs to avoid API issues
+    const urls = {
+      'paper-1.20.1': 'https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar',
+      'vanilla-1.20.1': 'https://piston-data.mojang.com/v1/objects/15c777e2cfe0556eef19aab534b186c0c6f277e1/server.jar',
+      'fabric-1.20.1': 'https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.15.7/0.12.3/server/jar'
+    };
+    
+    const key = `${edition}-${version}`;
+    if (urls[key]) {
+      return urls[key];
     }
+    
+    throw new Error(`Unsupported edition/version: ${edition} ${version}`);
   }
 
- async findAvailablePort() {
-    // Simple port allocation - start from port range start and increment
-    for (let port = this.portStart; port <= this.portEnd; port++) {
-        const isAvailable = await this.isPortAvailable(port);
-        if (isAvailable) {
-            return port;
-        }
+  async findAvailablePort() {
+    // Simple sequential port assignment
+    let port = this.portStart;
+    let attempts = 0;
+    
+    while (port <= this.portEnd && attempts < 100) {
+      if (await this.isPortAvailable(port)) {
+        return port;
+      }
+      port++;
+      attempts++;
     }
-    throw new Error('No available ports found in range ' + this.portStart + '-' + this.portEnd);
-}
+    throw new Error('No available ports found');
+  }
 
-async isPortAvailable(port) {
+  async isPortAvailable(port) {
     return new Promise((resolve) => {
-        const net = require('net');
-        const tester = net.createServer();
-        
-        tester.once('error', (err) => {
-            if (err.code === 'EADDRINUSE') {
-                resolve(false);
-            } else {
-                resolve(false); // Other errors also mean port is not available
-            }
+      const net = require('net');
+      const tester = net.createServer();
+      
+      tester.once('error', (err) => {
+        resolve(false);
+      });
+      
+      tester.once('listening', () => {
+        tester.close(() => {
+          resolve(true);
         });
-        
-        tester.once('listening', () => {
-            tester.close(() => {
-                resolve(true);
-            });
-        });
-        
-        tester.listen(port, '0.0.0.0');
+      });
+      
+      tester.listen(port, '0.0.0.0');
     });
-}
+  }
 
   async downloadFile(url, filePath) {
+    console.log('Downloading server jar...');
     const response = await axios({
       method: 'GET',
       url: url,
       responseType: 'stream',
-      timeout: 60000
+      timeout: 120000
     });
 
     const writer = require('fs').createWriteStream(filePath);
@@ -162,12 +161,13 @@ async isPortAvailable(port) {
   }
 
   async createConfigFiles(serverDir, config) {
-    // eula.txt
+    console.log('Creating configuration files...');
+    
+    // eula.txt - accept EULA automatically
     await fs.writeFile(path.join(serverDir, 'eula.txt'), 'eula=true\n');
 
     // server.properties
     const properties = `
-# Minecraft server properties
 motd=${config.motd}
 server-port=${config.port}
 max-players=20
@@ -179,8 +179,6 @@ difficulty=easy
 gamemode=survival
 view-distance=10
 enable-rcon=false
-rcon.port=${config.port + 1}
-rcon.password=password
     `.trim();
 
     await fs.writeFile(path.join(serverDir, 'server.properties'), properties);
@@ -188,105 +186,118 @@ rcon.password=password
     // Create start script
     const startScript = `#!/bin/bash
 cd "${serverDir}"
-while true; do
-  java -Xmx${config.ram}G -Xms1G -jar server.jar nogui
-  echo "Server crashed, restarting in 10 seconds..."
-  sleep 10
-done
+echo "Starting Minecraft server..."
+java -Xmx${config.ram}G -Xms1G -jar server.jar nogui
+echo "Server stopped or crashed"
 `;
     await fs.writeFile(path.join(serverDir, 'start.sh'), startScript);
     await fs.chmod(path.join(serverDir, 'start.sh'), 0o755);
   }
 
-  async installForge(serverDir) {
-    console.log('Installing Forge server...');
-    await execAsync(`cd "${serverDir}" && java -jar server.jar --installServer`);
+  async firstTimeSetup(serverDir, serverId, ram) {
+    console.log('Running first-time setup...');
     
-    const files = await fs.readdir(serverDir);
-    const forgeJar = files.find(f => f.includes('forge') && f.endsWith('.jar') && !f.includes('installer'));
-    
-    if (forgeJar) {
-      await fs.rename(
-        path.join(serverDir, forgeJar),
-        path.join(serverDir, 'server.jar')
-      );
+    // First run to generate world and accept EULA
+    try {
+      const javaCmd = `cd "${serverDir}" && timeout 30 java -Xmx${ram}G -Xms1G -jar server.jar nogui || true`;
+      await execAsync(javaCmd);
+      
+      // Wait a bit for files to be written
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      // Check if server created necessary files
+      const files = await fs.readdir(serverDir);
+      console.log('Files in server directory:', files);
+      
+    } catch (error) {
+      console.log('First run completed (expected to exit after setup)');
     }
-    console.log('Forge installation completed');
   }
 
-  async startServer(serverDir, serverId, ram) {
-    // Use nohup instead of screen for better compatibility
-    const javaCmd = `java -Xmx${ram}G -Xms1G -jar server.jar nogui`;
-    const nohupCmd = `cd "${serverDir}" && nohup bash start.sh > server.log 2>&1 & echo $! > server.pid`;
+  async startServer(serverDir, serverId, ram, port) {
+    console.log('Starting Minecraft server...');
     
-    await execAsync(nohupCmd);
+    // Use nohup to run in background
+    const startCmd = `cd "${serverDir}" && nohup java -Xmx${ram}G -Xms1G -jar server.jar nogui > server.log 2>&1 & echo $! > server.pid`;
+    
+    await execAsync(startCmd);
     
     // Wait for server to start
     console.log('Waiting for server to start...');
-    await new Promise(resolve => setTimeout(resolve, 20000));
+    await new Promise(resolve => setTimeout(resolve, 30000));
     
-    // Check if server process is running
+    // Check if server is running by checking the log
     try {
-      const pid = await fs.readFile(path.join(serverDir, 'server.pid'), 'utf8');
-      await execAsync(`ps -p ${pid.trim()}`);
-      console.log(`Server ${serverId} started successfully with PID: ${pid.trim()}`);
+      const logContent = await fs.readFile(path.join(serverDir, 'server.log'), 'utf8');
+      console.log('Server log snippet:', logContent.substring(0, 500));
+      
+      if (logContent.includes('Done') && logContent.includes('For help, type "help"')) {
+        console.log('✅ Server started successfully!');
+        return;
+      }
+      
+      if (logContent.includes('ERROR') || logContent.includes('Failed')) {
+        throw new Error('Server startup failed. Check server.log for errors.');
+      }
+      
+      // Check if port is listening
+      const isPortListening = await this.isPortListening(port);
+      if (isPortListening) {
+        console.log('✅ Server is listening on port', port);
+        return;
+      }
+      
+      throw new Error('Server started but not fully ready');
+      
     } catch (error) {
-      // Check if port is listening instead
-      try {
-        const { stdout } = await execAsync(`netstat -tuln | grep :${await this.getServerPort(serverDir)}`);
-        if (stdout) {
-          console.log(`Server ${serverId} is listening on port`);
-          return;
-        }
-      } catch (e) {
-        // Continue to error handling
+      if (error.code === 'ENOENT') {
+        throw new Error('Server log file not created - server failed to start');
       }
-      
-      // Check server.log for errors
-      try {
-        const log = await fs.readFile(path.join(serverDir, 'server.log'), 'utf8');
-        if (log.includes('ERROR') || log.includes('Failed')) {
-          throw new Error('Server startup failed. Check server.log for details.');
-        }
-      } catch (logError) {
-        // Ignore log read errors
-      }
-      
-      throw new Error('Server failed to start - process not found');
+      throw error;
     }
   }
 
-  async getServerPort(serverDir) {
-    try {
-      const properties = await fs.readFile(path.join(serverDir, 'server.properties'), 'utf8');
-      const portMatch = properties.match(/server-port=(\d+)/);
-      return portMatch ? parseInt(portMatch[1]) : 25565;
-    } catch (error) {
-      return 25565;
-    }
+  async isPortListening(port) {
+    return new Promise((resolve) => {
+      const net = require('net');
+      const socket = new net.Socket();
+      
+      socket.setTimeout(2000);
+      socket.on('connect', () => {
+        socket.destroy();
+        resolve(true);
+      });
+      
+      socket.on('timeout', () => {
+        socket.destroy();
+        resolve(false);
+      });
+      
+      socket.on('error', () => {
+        resolve(false);
+      });
+      
+      socket.connect(port, '127.0.0.1');
+    });
   }
 
   async cleanupServer(serverId) {
     try {
       const serverDir = path.join(this.baseDir, serverId);
       
-      // Kill process using PID file
+      // Kill process
       try {
-        const pid = await fs.readFile(path.join(serverDir, 'server.pid'), 'utf8');
+        const pidFile = path.join(serverDir, 'server.pid');
+        const pid = await fs.readFile(pidFile, 'utf8');
         await execAsync(`kill ${pid.trim()} 2>/dev/null || true`);
       } catch (e) {
-        // If no PID file, try to kill by port
-        try {
-          const port = await this.getServerPort(serverDir);
-          await execAsync(`fuser -k ${port}/tcp 2>/dev/null || true`);
-        } catch (e2) {
-          // Ignore kill errors
-        }
+        // Ignore if no PID file
       }
       
+      // Remove directory
       await fs.rm(serverDir, { recursive: true, force: true });
       this.activeServers.delete(serverId);
-      console.log(`Cleaned up server: ${serverId}`);
+      console.log(`🧹 Cleaned up server: ${serverId}`);
     } catch (error) {
       console.error('Cleanup error:', error);
     }
@@ -295,10 +306,11 @@ done
   async stopServer(serverId) {
     try {
       const serverDir = path.join(this.baseDir, serverId);
-      const pid = await fs.readFile(path.join(serverDir, 'server.pid'), 'utf8');
+      const pidFile = path.join(serverDir, 'server.pid');
+      const pid = await fs.readFile(pidFile, 'utf8');
       await execAsync(`kill ${pid.trim()}`);
       this.activeServers.delete(serverId);
-      console.log(`Stopped server: ${serverId}`);
+      console.log(`⏹️ Stopped server: ${serverId}`);
       return true;
     } catch (error) {
       return false;
@@ -311,7 +323,7 @@ done
       const serverDir = path.join(this.baseDir, serverId);
       await fs.rm(serverDir, { recursive: true, force: true });
       this.activeServers.delete(serverId);
-      console.log(`Deleted server: ${serverId}`);
+      console.log(`🗑️ Deleted server: ${serverId}`);
       return true;
     } catch (error) {
       return false;
