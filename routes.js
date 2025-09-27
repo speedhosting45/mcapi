@@ -3,20 +3,6 @@ const deployEngine = require('./deployEngine');
 
 const router = express.Router();
 
-// Simple API key middleware
-const checkApiKey = (req, res, next) => {
-  const apiKey = req.headers['x-api-key'] || req.headers['authorization'];
-  
-  if (apiKey === process.env.API_KEY) {
-    next();
-  } else {
-    res.status(401).json({ error: 'Invalid API key' });
-  }
-};
-
-// Apply API key check to all routes
-router.use(checkApiKey);
-
 // Deploy a new server
 router.post('/deploy', async (req, res) => {
   try {
@@ -144,7 +130,7 @@ router.get('/versions/:edition', async (req, res) => {
   }
 });
 
-// Health check (no API key required)
+// Health check
 router.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
