@@ -12,7 +12,7 @@ class DeployEngine {
     this.portEnd = parseInt(process.env.MINECRAFT_PORT_END) || 26000;
     this.baseDir = process.env.MINECRAFT_BASE_DIR || '/home/servers';
     
-    this.activeServers = new Map(); // Track active servers
+    this.activeServers = new Map();
   }
 
   async deployServer(deployConfig) {
@@ -39,7 +39,8 @@ class DeployEngine {
       await this.createConfigFiles(serverDir, { 
         motd: motd || 'A Minecraft Server', 
         port, 
-        name: serverName || serverId 
+        name: serverName || serverId,
+        ram: ram || 2
       });
 
       // Forge special handling
@@ -47,7 +48,7 @@ class DeployEngine {
         await this.installForge(serverDir);
       }
 
-      // Start server
+      // Start server using nohup instead of screen
       await this.startServer(serverDir, serverId, ram);
 
       const serverInfo = {
@@ -89,9 +90,7 @@ class DeployEngine {
   async getDownloadUrl(edition, version) {
     switch (edition) {
       case 'paper':
-        const paperResponse = await axios.get(`https://api.papermc.io/v2/projects/paper/versions/${version}/builds`);
-        const latestBuild = paperResponse.data.builds[paperResponse.data.builds.length - 1];
-        return `https://api.papermc.io/v2/projects/paper/versions/${version}/builds/${latestBuild.build}/downloads/paper-${version}-${latestBuild.build}.jar`;
+        return `https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar`;
 
       case 'vanilla':
         const vanillaResponse = await axios.get('https://launchermeta.mojang.com/mc/game/version_manifest.json');
@@ -100,13 +99,10 @@ class DeployEngine {
         return versionDetail.data.downloads.server.url;
 
       case 'fabric':
-        const loaderResponse = await axios.get('https://meta.fabricmc.net/v2/versions/loader');
-        const latestLoader = loaderResponse.data[0].version;
-        return `https://meta.fabricmc.net/v2/versions/loader/${version}/${latestLoader}/0.12.3/server/jar`;
+        return `https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.15.7/0.12.3/server/jar`;
 
       case 'forge':
-        // Simple Forge URL pattern
-        return `https://maven.minecraftforge.net/net/minecraftforge/forge/${version}-49.0.1/forge-${version}-49.0.1-installer.jar`;
+        return `https://maven.minecraftforge.net/net/minecraftforge/forge/1.20.1-47.2.0/forge-1.20.1-47.2.0-installer.jar`;
 
       default:
         throw new Error(`Unsupported edition: ${edition}`);
@@ -116,9 +112,8 @@ class DeployEngine {
   async findAvailablePort() {
     for (let port = this.portStart; port <= this.portEnd; port++) {
       try {
-        await execAsync(`lsof -i:${port}`);
+        await execAsync(`netstat -tuln | grep :${port} || echo "free"`);
       } catch (error) {
-        // Port is available if command fails
         return port;
       }
     }
@@ -130,7 +125,7 @@ class DeployEngine {
       method: 'GET',
       url: url,
       responseType: 'stream',
-      timeout: 30000
+      timeout: 60000
     });
 
     const writer = require('fs').createWriteStream(filePath);
@@ -160,6 +155,9 @@ spawn-protection=0
 difficulty=easy
 gamemode=survival
 view-distance=10
+enable-rcon=false
+rcon.port=${config.port + 1}
+rcon.password=password
     `.trim();
 
     await fs.writeFile(path.join(serverDir, 'server.properties'), properties);
@@ -167,7 +165,11 @@ view-distance=10
     // Create start script
     const startScript = `#!/bin/bash
 cd "${serverDir}"
-java -Xmx${process.env.MINECRAFT_MAX_RAM || 2}G -Xms1G -jar server.jar nogui
+while true; do
+  java -Xmx${config.ram}G -Xms1G -jar server.jar nogui
+  echo "Server crashed, restarting in 10 seconds..."
+  sleep 10
+done
 `;
     await fs.writeFile(path.join(serverDir, 'start.sh'), startScript);
     await fs.chmod(path.join(serverDir, 'start.sh'), 0o755);
@@ -177,7 +179,6 @@ java -Xmx${process.env.MINECRAFT_MAX_RAM || 2}G -Xms1G -jar server.jar nogui
     console.log('Installing Forge server...');
     await execAsync(`cd "${serverDir}" && java -jar server.jar --installServer`);
     
-    // Find and rename the Forge jar
     const files = await fs.readdir(serverDir);
     const forgeJar = files.find(f => f.includes('forge') && f.endsWith('.jar') && !f.includes('installer'));
     
@@ -191,27 +192,75 @@ java -Xmx${process.env.MINECRAFT_MAX_RAM || 2}G -Xms1G -jar server.jar nogui
   }
 
   async startServer(serverDir, serverId, ram) {
+    // Use nohup instead of screen for better compatibility
     const javaCmd = `java -Xmx${ram}G -Xms1G -jar server.jar nogui`;
-    const screenCmd = `screen -dmS ${serverId} bash -c 'cd "${serverDir}" && ${javaCmd} 2>&1 | tee server.log'`;
+    const nohupCmd = `cd "${serverDir}" && nohup bash start.sh > server.log 2>&1 & echo $! > server.pid`;
     
-    await execAsync(screenCmd);
+    await execAsync(nohupCmd);
     
     // Wait for server to start
-    await new Promise(resolve => setTimeout(resolve, 15000));
+    console.log('Waiting for server to start...');
+    await new Promise(resolve => setTimeout(resolve, 20000));
     
-    // Check if screen session is running
-    const { stdout } = await execAsync(`screen -list | grep ${serverId} || echo "not found"`);
-    if (stdout.includes('not found')) {
-      throw new Error('Server failed to start - screen session not found');
+    // Check if server process is running
+    try {
+      const pid = await fs.readFile(path.join(serverDir, 'server.pid'), 'utf8');
+      await execAsync(`ps -p ${pid.trim()}`);
+      console.log(`Server ${serverId} started successfully with PID: ${pid.trim()}`);
+    } catch (error) {
+      // Check if port is listening instead
+      try {
+        const { stdout } = await execAsync(`netstat -tuln | grep :${await this.getServerPort(serverDir)}`);
+        if (stdout) {
+          console.log(`Server ${serverId} is listening on port`);
+          return;
+        }
+      } catch (e) {
+        // Continue to error handling
+      }
+      
+      // Check server.log for errors
+      try {
+        const log = await fs.readFile(path.join(serverDir, 'server.log'), 'utf8');
+        if (log.includes('ERROR') || log.includes('Failed')) {
+          throw new Error('Server startup failed. Check server.log for details.');
+        }
+      } catch (logError) {
+        // Ignore log read errors
+      }
+      
+      throw new Error('Server failed to start - process not found');
     }
-    
-    console.log(`Server ${serverId} started successfully`);
+  }
+
+  async getServerPort(serverDir) {
+    try {
+      const properties = await fs.readFile(path.join(serverDir, 'server.properties'), 'utf8');
+      const portMatch = properties.match(/server-port=(\d+)/);
+      return portMatch ? parseInt(portMatch[1]) : 25565;
+    } catch (error) {
+      return 25565;
+    }
   }
 
   async cleanupServer(serverId) {
     try {
-      await execAsync(`screen -S ${serverId} -X quit`).catch(() => {});
       const serverDir = path.join(this.baseDir, serverId);
+      
+      // Kill process using PID file
+      try {
+        const pid = await fs.readFile(path.join(serverDir, 'server.pid'), 'utf8');
+        await execAsync(`kill ${pid.trim()} 2>/dev/null || true`);
+      } catch (e) {
+        // If no PID file, try to kill by port
+        try {
+          const port = await this.getServerPort(serverDir);
+          await execAsync(`fuser -k ${port}/tcp 2>/dev/null || true`);
+        } catch (e2) {
+          // Ignore kill errors
+        }
+      }
+      
       await fs.rm(serverDir, { recursive: true, force: true });
       this.activeServers.delete(serverId);
       console.log(`Cleaned up server: ${serverId}`);
@@ -222,7 +271,9 @@ java -Xmx${process.env.MINECRAFT_MAX_RAM || 2}G -Xms1G -jar server.jar nogui
 
   async stopServer(serverId) {
     try {
-      await execAsync(`screen -S ${serverId} -X quit`);
+      const serverDir = path.join(this.baseDir, serverId);
+      const pid = await fs.readFile(path.join(serverDir, 'server.pid'), 'utf8');
+      await execAsync(`kill ${pid.trim()}`);
       this.activeServers.delete(serverId);
       console.log(`Stopped server: ${serverId}`);
       return true;
