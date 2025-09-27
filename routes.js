@@ -3,6 +3,20 @@ const deployEngine = require('./deployEngine');
 
 const router = express.Router();
 
+// Simple API key middleware
+const checkApiKey = (req, res, next) => {
+  const apiKey = req.headers['x-api-key'] || req.headers['authorization'];
+  
+  if (apiKey === process.env.API_KEY) {
+    next();
+  } else {
+    res.status(401).json({ error: 'Invalid API key' });
+  }
+};
+
+// Apply API key check to all routes
+router.use(checkApiKey);
+
 // Deploy a new server
 router.post('/deploy', async (req, res) => {
   try {
@@ -110,7 +124,6 @@ router.get('/versions/:edition', async (req, res) => {
   try {
     const { edition } = req.params;
     
-    // Simple version list (you can expand this)
     const versions = {
       paper: ['1.21.1', '1.20.4', '1.20.1', '1.19.4'],
       vanilla: ['1.21.1', '1.20.4', '1.20.1', '1.19.4'],
@@ -131,7 +144,7 @@ router.get('/versions/:edition', async (req, res) => {
   }
 });
 
-// Health check
+// Health check (no API key required)
 router.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
