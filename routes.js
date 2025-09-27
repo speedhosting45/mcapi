@@ -138,15 +138,16 @@ router.get('/servers', async (req, res) => {
 });
 
 // Get available versions
+// Get available versions
 router.get('/versions/:edition', async (req, res) => {
     try {
         const { edition } = req.params;
         
         const versions = {
-            paper: ['1.21.1', '1.21', '1.20.1', '1.19.4'],
-            vanilla: ['1.21.1', '1.21', '1.20.1', '1.19.4'],
-            fabric: ['1.21.1', '1.21', '1.20.1', '1.19.4'],
-            forge: ['1.21.1', '1.21', '1.20.1', '1.19.4']
+            paper: ['1.21.1', '1.21', '1.20.1'],
+            vanilla: ['1.21.1', '1.21', '1.20.1'],
+            fabric: ['1.21.1', '1.21', '1.20.1'],
+            forge: ['1.21.1', '1.21', '1.20.1']
         };
 
         if (!versions[edition]) {
