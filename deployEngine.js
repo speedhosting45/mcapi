@@ -109,16 +109,39 @@ class DeployEngine {
     }
   }
 
-  async findAvailablePort() {
+ async findAvailablePort() {
+    // Simple port allocation - start from port range start and increment
     for (let port = this.portStart; port <= this.portEnd; port++) {
-      try {
-        await execAsync(`netstat -tuln | grep :${port} || echo "free"`);
-      } catch (error) {
-        return port;
-      }
+        const isAvailable = await this.isPortAvailable(port);
+        if (isAvailable) {
+            return port;
+        }
     }
-    throw new Error('No available ports found');
-  }
+    throw new Error('No available ports found in range ' + this.portStart + '-' + this.portEnd);
+}
+
+async isPortAvailable(port) {
+    return new Promise((resolve) => {
+        const net = require('net');
+        const tester = net.createServer();
+        
+        tester.once('error', (err) => {
+            if (err.code === 'EADDRINUSE') {
+                resolve(false);
+            } else {
+                resolve(false); // Other errors also mean port is not available
+            }
+        });
+        
+        tester.once('listening', () => {
+            tester.close(() => {
+                resolve(true);
+            });
+        });
+        
+        tester.listen(port, '0.0.0.0');
+    });
+}
 
   async downloadFile(url, filePath) {
     const response = await axios({
