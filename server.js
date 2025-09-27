@@ -8,22 +8,18 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Simple API key check
-const checkApiKey = (req, res, next) => {
-  const apiKey = req.headers['x-api-key'];
-  if (apiKey === process.env.API_KEY) {
-    next();
-  } else {
-    res.status(401).json({ error: 'Invalid API key' });
-  }
-};
-
 // Routes
-app.use('/api', checkApiKey, require('./routes'));
+app.use('/api', require('./routes'));
+
+// Error handling
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).json({ error: 'Internal server error' });
+});
 
 // Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Minecraft Deploy API running on port ${PORT}`);
-  console.log(`Base directory: ${process.env.MINECRAFT_BASE_DIR}`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Minecraft Deploy API running on port ${PORT}`);
+    console.log(`API Key: ${process.env.API_KEY}`);
 });
