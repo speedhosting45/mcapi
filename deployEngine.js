@@ -12,18 +12,60 @@ class DeployEngine {
         this.portEnd = parseInt(process.env.MINECRAFT_PORT_END) || 26000;
         this.baseDir = process.env.MINECRAFT_BASE_DIR || '/home/servers';
         this.activeServers = new Map();
+        this.serverConfigs = new Map();
     }
 
+    // MAIN DEPLOYMENT METHOD
     async deployServer(deployConfig) {
-        const { serverId, edition, version, motd, ram, serverName } = deployConfig;
+        const { 
+            serverId, 
+            edition, 
+            version, 
+            motd, 
+            ram, 
+            serverName,
+            // Advanced options
+            gamemode = 'survival',
+            difficulty = 'easy',
+            maxPlayers = 20,
+            viewDistance = 10,
+            simulationDistance = 10,
+            pvp = true,
+            spawnProtection = 16,
+            spawnAnimals = true,
+            spawnMonsters = true,
+            spawnNpcs = true,
+            allowNether = true,
+            allowEnd = true,
+            allowFlight = false,
+            whiteList = false,
+            enforceWhitelist = false,
+            enableCommandBlock = false,
+            onlineMode = true,
+            // Loading screen configuration
+            loadingScreen = {
+                enabled: true,
+                type: 'default',
+                message: 'Server is starting...',
+                percentage: null
+            }
+        } = deployConfig;
 
         try {
             console.log(`🚀 Starting deployment: ${serverId} (${edition} ${version})`);
+            
+            // Show loading screen simulation
+            if (loadingScreen.enabled) {
+                await this.showLoadingScreen(loadingScreen, serverId);
+            }
 
-            // Check Java
+            // Validate inputs
+            await this.validateConfig(deployConfig);
+
+            // Check Java installation
             await this.checkJavaInstallation();
 
-            // Create directory
+            // Create server directory
             const serverDir = path.join(this.baseDir, serverId);
             await fs.mkdir(serverDir, { recursive: true });
 
@@ -31,15 +73,23 @@ class DeployEngine {
             const port = await this.findAvailablePort();
             console.log(`📍 Allocated port: ${port}`);
             
-            // Download
+            // Get download URL
             const downloadUrl = await this.getDownloadUrl(edition, version);
             console.log(`📥 Downloading from: ${downloadUrl}`);
+            
+            // Download server jar
             await this.downloadFile(downloadUrl, path.join(serverDir, 'server.jar'));
 
-            // Config files
-            await this.createConfigFiles(serverDir, { motd, port, name: serverName, ram });
+            // Create configuration files
+            await this.createConfigFiles(serverDir, { 
+                motd, port, name: serverName, ram,
+                gamemode, difficulty, maxPlayers, viewDistance, simulationDistance,
+                pvp, spawnProtection, spawnAnimals, spawnMonsters, spawnNpcs,
+                allowNether, allowEnd, allowFlight, whiteList, enforceWhitelist,
+                enableCommandBlock, onlineMode
+            });
 
-            // Forge handling
+            // Forge special handling
             if (edition === 'forge') {
                 await this.installForge(serverDir);
             }
@@ -50,23 +100,96 @@ class DeployEngine {
             // Start server
             await this.startServer(serverDir, serverId, ram, port);
 
-            const serverInfo = {
-                serverId, edition, version, port, ram,
-                status: 'running', directory: serverDir, startedAt: new Date()
+            // Save server configuration
+            const serverConfig = {
+                serverId,
+                edition,
+                version,
+                motd,
+                ram,
+                serverName,
+                port,
+                directory: serverDir,
+                gamemode,
+                difficulty,
+                maxPlayers,
+                status: 'running',
+                deployedAt: new Date(),
+                loadingScreen: loadingScreen
             };
-
-            this.activeServers.set(serverId, serverInfo);
+            
+            this.activeServers.set(serverId, serverConfig);
+            await this.saveServerConfig(serverDir, serverConfig);
 
             console.log(`✅ Server ${serverId} deployed successfully on port ${port}`);
-            return { success: true, serverId, port, status: 'running', message: 'Server deployed successfully' };
+            return { 
+                success: true, 
+                serverId, 
+                port, 
+                status: 'running',
+                gamemode: gamemode,
+                difficulty: difficulty,
+                maxPlayers: maxPlayers,
+                message: 'Server deployed successfully' 
+            };
 
         } catch (error) {
             console.error(`❌ Deployment failed for ${serverId}:`, error);
             await this.cleanupServer(serverId);
-            return { success: false, error: error.message, message: 'Deployment failed' };
+            return { 
+                success: false, 
+                error: error.message,
+                message: 'Deployment failed' 
+            };
         }
     }
 
+    // VALIDATION
+    async validateConfig(config) {
+        const supportedEditions = ['vanilla', 'paper', 'fabric', 'forge'];
+        const supportedGamemodes = ['survival', 'creative', 'adventure', 'spectator'];
+        const supportedDifficulties = ['peaceful', 'easy', 'normal', 'hard'];
+        
+        if (!supportedEditions.includes(config.edition)) {
+            throw new Error(`Unsupported edition: ${config.edition}`);
+        }
+        
+        if (config.gamemode && !supportedGamemodes.includes(config.gamemode)) {
+            throw new Error(`Unsupported gamemode: ${config.gamemode}`);
+        }
+        
+        if (config.difficulty && !supportedDifficulties.includes(config.difficulty)) {
+            throw new Error(`Unsupported difficulty: ${config.difficulty}`);
+        }
+        
+        if (config.ram < 1 || config.ram > (process.env.MINECRAFT_MAX_RAM || 8)) {
+            throw new Error(`RAM must be between 1 and ${process.env.MINECRAFT_MAX_RAM || 8} GB`);
+        }
+    }
+
+    // LOADING SCREEN
+    async showLoadingScreen(loadingScreen, serverId) {
+        console.log(`🔄 ${loadingScreen.message}`);
+        
+        if (loadingScreen.type === 'percentage' && loadingScreen.percentage) {
+            const steps = loadingScreen.percentage;
+            for (let i = 0; i <= steps; i++) {
+                const percent = Math.round((i / steps) * 100);
+                process.stdout.write(`\r📊 Loading: ${percent}% [${'█'.repeat(i)}${'░'.repeat(steps - i)}]`);
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            console.log('\n');
+        } else if (loadingScreen.type === 'custom') {
+            const frames = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
+            for (let i = 0; i < 24; i++) {
+                process.stdout.write(`\r${frames[i % frames.length]} ${loadingScreen.message}`);
+                await new Promise(resolve => setTimeout(resolve, 125));
+            }
+            console.log('\n');
+        }
+    }
+
+    // JAVA CHECK
     async checkJavaInstallation() {
         try {
             await execAsync('java -version');
@@ -76,6 +199,7 @@ class DeployEngine {
         }
     }
 
+    // PORT ALLOCATION
     async findAvailablePort() {
         for (let port = this.portStart; port <= this.portEnd; port++) {
             if (await this.isPortAvailable(port)) {
@@ -90,45 +214,48 @@ class DeployEngine {
             const net = require('net');
             const tester = net.createServer();
             
-            tester.once('error', (err) => {
-                resolve(false);
-            });
-            
+            tester.once('error', () => resolve(false));
             tester.once('listening', () => {
-                tester.close(() => {
-                    resolve(true);
-                });
+                tester.close(() => resolve(true));
             });
-            
             tester.listen(port, '0.0.0.0');
         });
     }
 
-   async getDownloadUrl(edition, version) {
-    const urls = {
-        // Fabric URLs
-        'fabric-1.21.1': 'https://meta.fabricmc.net/v2/versions/loader/1.21.1/0.15.7/0.15.7/server/jar',
-        'fabric-1.21': 'https://meta.fabricmc.net/v2/versions/loader/1.21/0.16.6/1.1.0/server/jar',
-        'fabric-1.20.1': 'https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.15.7/0.15.7/server/jar',
+    // DOWNLOAD URL MANAGEMENT
+    async getDownloadUrl(edition, version) {
+        const urls = {
+            // Paper URLs
+            'paper-1.21.1': 'https://api.papermc.io/v2/projects/paper/versions/1.21.1/builds/306/downloads/paper-1.21.1-306.jar',
+            'paper-1.21': 'https://api.papermc.io/v2/projects/paper/versions/1.21/builds/306/downloads/paper-1.21-306.jar',
+            'paper-1.20.4': 'https://api.papermc.io/v2/projects/paper/versions/1.20.4/builds/526/downloads/paper-1.20.4-526.jar',
+            'paper-1.20.1': 'https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar',
+            
+            // Vanilla URLs
+            'vanilla-1.21.1': 'https://piston-data.mojang.com/v1/objects/5b868151bd02b41319f54c8d4061b8cae84e664c/server.jar',
+            'vanilla-1.21': 'https://piston-data.mojang.com/v1/objects/51c9b061ad06682e6e8b3b8df5bb6edac8130a0a/server.jar',
+            'vanilla-1.20.1': 'https://piston-data.mojang.com/v1/objects/15c777e2cfe0556eef19aab534b186c0c6f277e1/server.jar',
+            
+            // Fabric URLs
+            'fabric-1.21.1': 'https://meta.fabricmc.net/v2/versions/loader/1.21.1/0.15.7/0.15.7/server/jar',
+            'fabric-1.21': 'https://meta.fabricmc.net/v2/versions/loader/1.21/0.15.7/0.15.7/server/jar',
+            'fabric-1.20.1': 'https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.15.7/0.15.7/server/jar',
+            
+            // Forge URLs
+            'forge-1.21.1': 'https://maven.minecraftforge.net/net/minecraftforge/forge/1.21.1-48.0.1/forge-1.21.1-48.0.1-installer.jar',
+            'forge-1.21': 'https://maven.minecraftforge.net/net/minecraftforge/forge/1.21-48.0.0/forge-1.21-48.0.0-installer.jar',
+            'forge-1.20.1': 'https://maven.minecraftforge.net/net/minecraftforge/forge/1.20.1-47.2.0/forge-1.20.1-47.2.0-installer.jar'
+        };
         
-        // Paper URLs
-        'paper-1.21.1': 'https://api.papermc.io/v2/projects/paper/versions/1.21.1/builds/306/downloads/paper-1.21.1-306.jar',
-        'paper-1.21': 'https://api.papermc.io/v2/projects/paper/versions/1.21/builds/306/downloads/paper-1.21-306.jar',
-        'paper-1.20.1': 'https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/196/downloads/paper-1.20.1-196.jar',
+        const key = `${edition}-${version}`;
+        if (urls[key]) {
+            return urls[key];
+        }
         
-        // Vanilla URLs
-        'vanilla-1.21.1': 'https://piston-data.mojang.com/v1/objects/5b868151bd02b41319f54c8d4061b8cae84e664c/server.jar',
-        'vanilla-1.21': 'https://piston-data.mojang.com/v1/objects/51c9b061ad06682e6e8b3b8df5bb6edac8130a0a/server.jar',
-        'vanilla-1.20.1': 'https://piston-data.mojang.com/v1/objects/15c777e2cfe0556eef19aab534b186c0c6f277e1/server.jar'
-    };
-    
-    const key = `${edition}-${version}`;
-    if (urls[key]) {
-        return urls[key];
+        throw new Error(`Unsupported edition/version: ${edition} ${version}`);
     }
-    
-    throw new Error(`Unsupported edition/version: ${edition} ${version}`);
-}
+
+    // FILE DOWNLOAD
     async downloadFile(url, filePath) {
         const response = await axios({
             method: 'GET',
@@ -147,49 +274,94 @@ class DeployEngine {
         });
     }
 
+    // CONFIGURATION FILES
     async createConfigFiles(serverDir, config) {
         // eula.txt
         await fs.writeFile(path.join(serverDir, 'eula.txt'), 'eula=true\n');
 
         // server.properties
         const properties = `
+# Minecraft Server Properties
 motd=${config.motd}
 server-port=${config.port}
-max-players=20
+max-players=${config.maxPlayers}
 level-name=${config.name}
-online-mode=false
-enable-command-block=true
-spawn-protection=0
-difficulty=easy
-gamemode=survival
-view-distance=10
-enable-rcon=false
+gamemode=${config.gamemode}
+difficulty=${config.difficulty}
+view-distance=${config.viewDistance}
+simulation-distance=${config.simulationDistance}
+pvp=${config.pvp}
+spawn-protection=${config.spawnProtection}
+spawn-animals=${config.spawnAnimals}
+spawn-monsters=${config.spawnMonsters}
+spawn-npcs=${config.spawnNpcs}
+allow-nether=${config.allowNether}
+allow-end=${config.allowEnd}
+allow-flight=${config.allowFlight}
+white-list=${config.whiteList}
+enforce-whitelist=${config.enforceWhitelist}
+enable-command-block=${config.enableCommandBlock}
+online-mode=${config.onlineMode}
+level-type=default
+max-world-size=29999984
+max-build-height=256
+use-native-transport=true
+enable-status=true
+enable-query=false
+query.port=${config.port}
+prevent-proxy-connections=false
+sync-chunk-writes=true
+rate-limit=0
+hardcore=false
         `.trim();
+
         await fs.writeFile(path.join(serverDir, 'server.properties'), properties);
+
+        // ops.json
+        const ops = [{
+            uuid: this.generateUUID(),
+            name: "Admin",
+            level: 4,
+            bypassesPlayerLimit: true
+        }];
+        await fs.writeFile(path.join(serverDir, 'ops.json'), JSON.stringify(ops, null, 2));
+
+        // whitelist.json if enabled
+        if (config.whiteList) {
+            const whitelist = [{
+                uuid: this.generateUUID(),
+                name: "TrustedPlayer"
+            }];
+            await fs.writeFile(path.join(serverDir, 'whitelist.json'), JSON.stringify(whitelist, null, 2));
+        }
 
         // start.sh
         const startScript = `#!/bin/bash
 cd "${serverDir}"
+echo "Starting Minecraft ${config.gamemode} server..."
 java -Xmx${config.ram}G -Xms1G -jar server.jar nogui
 `;
         await fs.writeFile(path.join(serverDir, 'start.sh'), startScript);
         await fs.chmod(path.join(serverDir, 'start.sh'), 0o755);
     }
 
+    // FORGE INSTALLATION
     async installForge(serverDir) {
-        try {
-            await execAsync(`cd "${serverDir}" && java -jar server.jar --installServer`);
-            const files = await fs.readdir(serverDir);
-            const forgeJar = files.find(f => f.includes('forge') && f.endsWith('.jar') && !f.includes('installer'));
-            if (forgeJar) {
-                await fs.rename(path.join(serverDir, forgeJar), path.join(serverDir, 'server.jar'));
-            }
-        } catch (error) {
-            throw new Error(`Forge installation failed: ${error.message}`);
+        console.log('Installing Forge server...');
+        await execAsync(`cd "${serverDir}" && java -jar server.jar --installServer`);
+        
+        const files = await fs.readdir(serverDir);
+        const forgeJar = files.find(f => f.includes('forge') && f.endsWith('.jar') && !f.includes('installer'));
+        
+        if (forgeJar) {
+            await fs.rename(path.join(serverDir, forgeJar), path.join(serverDir, 'server.jar'));
         }
+        console.log('Forge installation completed');
     }
 
+    // FIRST TIME SETUP
     async firstTimeSetup(serverDir, ram) {
+        console.log('Running first-time setup...');
         try {
             await execAsync(`cd "${serverDir}" && timeout 30 java -Xmx${ram}G -Xms1G -jar server.jar nogui || true`);
             await new Promise(resolve => setTimeout(resolve, 5000));
@@ -198,7 +370,10 @@ java -Xmx${config.ram}G -Xms1G -jar server.jar nogui
         }
     }
 
+    // SERVER STARTUP
     async startServer(serverDir, serverId, ram, port) {
+        console.log('Starting Minecraft server...');
+        
         const startCmd = `cd "${serverDir}" && nohup java -Xmx${ram}G -Xms1G -jar server.jar nogui > server.log 2>&1 & echo $! > server.pid`;
         await execAsync(startCmd);
         
@@ -206,18 +381,23 @@ java -Xmx${config.ram}G -Xms1G -jar server.jar nogui
         
         try {
             const logContent = await fs.readFile(path.join(serverDir, 'server.log'), 'utf8');
+            
             if (logContent.includes('Done') && logContent.includes('help')) {
                 console.log('✅ Server started successfully!');
                 return;
             }
+            
             if (logContent.includes('ERROR')) {
                 throw new Error('Server startup failed - check server.log');
             }
+            
             if (await this.isPortListening(port)) {
                 console.log('✅ Server is listening on port', port);
                 return;
             }
+            
             throw new Error('Server started but not fully ready');
+            
         } catch (error) {
             if (error.code === 'ENOENT') {
                 throw new Error('Server log file not created - server failed to start');
@@ -238,93 +418,83 @@ java -Xmx${config.ram}G -Xms1G -jar server.jar nogui
         });
     }
 
-   async stopServer(serverId) {
-    try {
-        console.log(`🛑 Attempting to stop server: ${serverId}`);
-        
-        const serverDir = path.join(this.baseDir, serverId);
-        
-        // Method 1: Try using PID file with process.kill (safer)
+    // SERVER MANAGEMENT
+    async stopServer(serverId) {
         try {
-            const pidFile = path.join(serverDir, 'server.pid');
-            const pid = await fs.readFile(pidFile, 'utf8');
-            const cleanPid = pid.trim();
+            console.log(`🛑 Stopping server: ${serverId}`);
+            const serverDir = path.join(this.baseDir, serverId);
             
-            if (cleanPid) {
-                console.log(`Stopping process with PID: ${cleanPid}`);
-                try {
-                    process.kill(parseInt(cleanPid), 'SIGTERM');
-                    await new Promise(resolve => setTimeout(resolve, 3000));
-                    
-                    // Check if still running
-                    try {
-                        process.kill(parseInt(cleanPid), 0);
-                        // Still running, force kill
-                        process.kill(parseInt(cleanPid), 'SIGKILL');
-                    } catch (e) {
-                        // Process already dead
-                    }
-                } catch (e) {
-                    console.log('Process already terminated');
-                }
+            // Try PID file
+            try {
+                const pid = await fs.readFile(path.join(serverDir, 'server.pid'), 'utf8');
+                process.kill(parseInt(pid.trim()), 'SIGTERM');
+                await new Promise(resolve => setTimeout(resolve, 3000));
+            } catch (pidError) {
+                // Ignore
             }
-        } catch (pidError) {
-            console.log('No PID file found');
-        }
-        
-        // Method 2: Use kill command directly (avoid pkill issues)
-        try {
+            
+            // Kill by process
             await execAsync('killall java 2>/dev/null || true', { timeout: 5000 });
-        } catch (e) {
-            // Ignore errors
-        }
-        
-        // Method 3: Kill by port
-        try {
-            const port = await this.getServerPort(serverDir);
-            await execAsync(`fuser -k ${port}/tcp 2>/dev/null || true`, { timeout: 5000 });
-        } catch (e) {
-            // Ignore errors
-        }
-        
-        // Wait for processes to terminate
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        
-        // Check if server is actually stopped
-        const isRunning = await this.isServerRunning(serverId);
-        
-        if (!isRunning) {
-            this.activeServers.delete(serverId);
-            console.log(`✅ Successfully stopped server: ${serverId}`);
-            return true;
-        } else {
-            console.log(`❌ Server ${serverId} might still be running`);
+            
+            // Kill by port
+            try {
+                const port = await this.getServerPort(serverDir);
+                await execAsync(`fuser -k ${port}/tcp 2>/dev/null || true`, { timeout: 5000 });
+            } catch (e) {
+                // Ignore
+            }
+            
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            
+            const isRunning = await this.isServerRunning(serverId);
+            if (!isRunning) {
+                this.activeServers.delete(serverId);
+                console.log(`✅ Stopped server: ${serverId}`);
+                return true;
+            }
+            
+            return false;
+            
+        } catch (error) {
+            console.error(`❌ Failed to stop server ${serverId}:`, error.message);
             return false;
         }
-        
-    } catch (error) {
-        console.error(`❌ Error stopping server ${serverId}:`, error.message);
-        return false;
     }
-}
 
-async isServerRunning(serverId) {
-    try {
-        const serverDir = path.join(this.baseDir, serverId);
-        const port = await this.getServerPort(serverDir);
-        
-        // Check if port is in use
-        const portAvailable = await this.isPortAvailable(port);
-        
-        // Check if Java process is running for this server
-        const { stdout } = await execAsync(`ps aux | grep "java" | grep "${serverDir}" | grep -v grep | wc -l`);
-        const processCount = parseInt(stdout.trim());
-        
-        return !portAvailable || processCount > 0;
-    } catch (error) {
-        return false;
+    async restartServer(serverId) {
+        try {
+            console.log(`🔄 Restarting server: ${serverId}`);
+            
+            let serverConfig = this.activeServers.get(serverId);
+            const serverDir = path.join(this.baseDir, serverId);
+            
+            if (!serverConfig) {
+                const configPath = path.join(serverDir, 'server.config.json');
+                const configData = await fs.readFile(configPath, 'utf8');
+                serverConfig = JSON.parse(configData);
+            }
+
+            await this.stopServer(serverId);
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            
+            const isRunning = await this.isServerRunning(serverId);
+            if (isRunning) throw new Error('Server failed to stop');
+            
+            await this.startServer(serverDir, serverId, serverConfig.ram, serverConfig.port);
+            
+            serverConfig.status = 'running';
+            serverConfig.restartedAt = new Date();
+            this.activeServers.set(serverId, serverConfig);
+            
+            console.log(`✅ Server ${serverId} restarted successfully`);
+            return true;
+            
+        } catch (error) {
+            console.error(`❌ Failed to restart server ${serverId}:`, error);
+            throw error;
+        }
     }
-}
+
     async deleteServer(serverId) {
         try {
             await this.stopServer(serverId);
@@ -341,14 +511,301 @@ async isServerRunning(serverId) {
     async cleanupServer(serverId) {
         try {
             const serverDir = path.join(this.baseDir, serverId);
-            await execAsync(`pkill -f "server.jar" || true`);
+            await execAsync('killall java 2>/dev/null || true');
             await fs.rm(serverDir, { recursive: true, force: true });
             this.activeServers.delete(serverId);
+            console.log(`🧹 Cleaned up server: ${serverId}`);
         } catch (error) {
             console.error('Cleanup error:', error);
         }
     }
 
+    // PLAYER MANAGEMENT
+    async addPlayer(serverId, playerName, playerUuid = null, opLevel = 0) {
+        try {
+            const serverDir = path.join(this.baseDir, serverId);
+            const uuid = playerUuid || this.generateUUID();
+            
+            // Add to whitelist
+            let whitelist = [];
+            try {
+                const data = await fs.readFile(path.join(serverDir, 'whitelist.json'), 'utf8');
+                whitelist = JSON.parse(data);
+            } catch (error) {}
+            
+            if (whitelist.find(p => p.name === playerName)) {
+                throw new Error(`Player ${playerName} already in whitelist`);
+            }
+            
+            whitelist.push({ uuid, name: playerName });
+            await fs.writeFile(path.join(serverDir, 'whitelist.json'), JSON.stringify(whitelist, null, 2));
+            
+            // Add to ops if needed
+            if (opLevel > 0) {
+                let ops = [];
+                try {
+                    const data = await fs.readFile(path.join(serverDir, 'ops.json'), 'utf8');
+                    ops = JSON.parse(data);
+                } catch (error) {}
+                
+                ops.push({ uuid, name: playerName, level: opLevel, bypassesPlayerLimit: opLevel >= 4 });
+                await fs.writeFile(path.join(serverDir, 'ops.json'), JSON.stringify(ops, null, 2));
+            }
+            
+            console.log(`✅ Player ${playerName} added to server ${serverId}`);
+            return { success: true, playerName, opLevel, message: 'Player added successfully' };
+            
+        } catch (error) {
+            console.error(`❌ Failed to add player:`, error);
+            throw error;
+        }
+    }
+
+    async removePlayer(serverId, playerName) {
+        try {
+            const serverDir = path.join(this.baseDir, serverId);
+            
+            // Remove from whitelist
+            let whitelist = [];
+            try {
+                const data = await fs.readFile(path.join(serverDir, 'whitelist.json'), 'utf8');
+                whitelist = JSON.parse(data);
+            } catch (error) {
+                throw new Error('Whitelist file not found');
+            }
+            
+            const playerIndex = whitelist.findIndex(p => p.name === playerName);
+            if (playerIndex === -1) throw new Error(`Player ${playerName} not found`);
+            
+            const playerUuid = whitelist[playerIndex].uuid;
+            whitelist.splice(playerIndex, 1);
+            await fs.writeFile(path.join(serverDir, 'whitelist.json'), JSON.stringify(whitelist, null, 2));
+            
+            // Remove from ops
+            try {
+                const data = await fs.readFile(path.join(serverDir, 'ops.json'), 'utf8');
+                let ops = JSON.parse(data);
+                ops = ops.filter(p => p.uuid !== playerUuid);
+                await fs.writeFile(path.join(serverDir, 'ops.json'), JSON.stringify(ops, null, 2));
+            } catch (error) {}
+            
+            console.log(`✅ Player ${playerName} removed from server ${serverId}`);
+            return { success: true, playerName, message: 'Player removed successfully' };
+            
+        } catch (error) {
+            console.error(`❌ Failed to remove player:`, error);
+            throw error;
+        }
+    }
+
+    async listPlayers(serverId) {
+        try {
+            const serverDir = path.join(this.baseDir, serverId);
+            
+            let whitelist = [];
+            let ops = [];
+            
+            try {
+                const data = await fs.readFile(path.join(serverDir, 'whitelist.json'), 'utf8');
+                whitelist = JSON.parse(data);
+            } catch (error) {}
+            
+            try {
+                const data = await fs.readFile(path.join(serverDir, 'ops.json'), 'utf8');
+                ops = JSON.parse(data);
+            } catch (error) {}
+            
+            const players = whitelist.map(player => {
+                const op = ops.find(o => o.uuid === player.uuid);
+                return {
+                    name: player.name,
+                    uuid: player.uuid,
+                    opLevel: op ? op.level : 0,
+                    isOp: !!op
+                };
+            });
+            
+            return players;
+            
+        } catch (error) {
+            console.error(`❌ Failed to list players:`, error);
+            throw error;
+        }
+    }
+
+    // MOD MANAGEMENT
+    async addMod(serverId, modUrl, modName = null) {
+        try {
+            const serverDir = path.join(this.baseDir, serverId);
+            const modsDir = path.join(serverDir, 'mods');
+            await fs.mkdir(modsDir, { recursive: true });
+            
+            const fileName = modName || modUrl.split('/').pop();
+            const modPath = path.join(modsDir, fileName.endsWith('.jar') ? fileName : fileName + '.jar');
+            
+            // Check if mod exists
+            try {
+                await fs.access(modPath);
+                throw new Error(`Mod ${fileName} already exists`);
+            } catch (error) {}
+            
+            // Download mod
+            const response = await axios({
+                method: 'GET',
+                url: modUrl,
+                responseType: 'stream',
+                timeout: 60000,
+                maxContentLength: 100 * 1024 * 1024
+            });
+            
+            const writer = fs.createWriteStream(modPath);
+            response.data.pipe(writer);
+            
+            await new Promise((resolve, reject) => {
+                writer.on('finish', resolve);
+                writer.on('error', reject);
+            });
+            
+            // Validate JAR
+            const buffer = Buffer.alloc(4);
+            const fd = await fs.open(modPath, 'r');
+            await fd.read(buffer, 0, 4, 0);
+            await fd.close();
+            
+            if (buffer.readUInt32BE(0) !== 0x504b0304) {
+                await fs.unlink(modPath);
+                throw new Error('Downloaded file is not a valid JAR file');
+            }
+            
+            console.log(`✅ Mod ${fileName} added to server ${serverId}`);
+            return { success: true, modName: fileName, message: 'Mod installed successfully' };
+            
+        } catch (error) {
+            console.error(`❌ Failed to add mod:`, error);
+            throw error;
+        }
+    }
+
+    async listMods(serverId) {
+        try {
+            const serverDir = path.join(this.baseDir, serverId);
+            const modsDir = path.join(serverDir, 'mods');
+            
+            try {
+                await fs.access(modsDir);
+            } catch (error) {
+                return [];
+            }
+            
+            const files = await fs.readdir(modsDir);
+            const mods = files.filter(file => file.endsWith('.jar'));
+            
+            const modsInfo = await Promise.all(
+                mods.map(async (modFile) => {
+                    const modPath = path.join(modsDir, modFile);
+                    const stats = await fs.stat(modPath);
+                    return {
+                        name: modFile,
+                        size: stats.size,
+                        modified: stats.mtime
+                    };
+                })
+            );
+            
+            return modsInfo;
+            
+        } catch (error) {
+            console.error(`❌ Failed to list mods:`, error);
+            throw error;
+        }
+    }
+
+    async deleteMod(serverId, modName) {
+        try {
+            const serverDir = path.join(this.baseDir, serverId);
+            const modPath = path.join(serverDir, 'mods', modName);
+            
+            await fs.access(modPath);
+            await fs.unlink(modPath);
+            
+            console.log(`✅ Mod ${modName} deleted from server ${serverId}`);
+            return { success: true, message: `Mod ${modName} deleted successfully` };
+            
+        } catch (error) {
+            console.error(`❌ Failed to delete mod:`, error);
+            throw error;
+        }
+    }
+
+    // SERVER SETTINGS
+    async updateServerSettings(serverId, settings) {
+        try {
+            const serverDir = path.join(this.baseDir, serverId);
+            const propertiesPath = path.join(serverDir, 'server.properties');
+            
+            let properties = await fs.readFile(propertiesPath, 'utf8');
+            
+            Object.keys(settings).forEach(key => {
+                const value = settings[key];
+                const regex = new RegExp(`^${key}=.*`, 'm');
+                
+                if (regex.test(properties)) {
+                    properties = properties.replace(regex, `${key}=${value}`);
+                } else {
+                    properties += `\n${key}=${value}`;
+                }
+            });
+            
+            await fs.writeFile(propertiesPath, properties);
+            console.log(`✅ Server settings updated for ${serverId}`);
+            return { success: true, settings, message: 'Server settings updated' };
+            
+        } catch (error) {
+            console.error(`❌ Failed to update settings:`, error);
+            throw error;
+        }
+    }
+
+    // HELPER METHODS
+    async isServerRunning(serverId) {
+        try {
+            const serverDir = path.join(this.baseDir, serverId);
+            const port = await this.getServerPort(serverDir);
+            const portAvailable = await this.isPortAvailable(port);
+            
+            const { stdout } = await execAsync(`ps aux | grep "java" | grep "${serverDir}" | grep -v grep | wc -l`);
+            const processCount = parseInt(stdout.trim());
+            
+            return !portAvailable || processCount > 0;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    async getServerPort(serverDir) {
+        try {
+            const properties = await fs.readFile(path.join(serverDir, 'server.properties'), 'utf8');
+            const portMatch = properties.match(/server-port=(\d+)/);
+            return portMatch ? parseInt(portMatch[1]) : 25565;
+        } catch (error) {
+            return 25565;
+        }
+    }
+
+    generateUUID() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            const r = Math.random() * 16 | 0;
+            const v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+
+    async saveServerConfig(serverDir, config) {
+        const configPath = path.join(serverDir, 'server.config.json');
+        await fs.writeFile(configPath, JSON.stringify(config, null, 2));
+    }
+
+    // STATUS METHODS
     getServerStatus(serverId) {
         const server = this.activeServers.get(serverId);
         return server ? server.status : 'not_found';
@@ -356,6 +813,18 @@ async isServerRunning(serverId) {
 
     getAllServers() {
         return Array.from(this.activeServers.values());
+    }
+
+    // VERSION MANAGEMENT
+    async getAvailableVersions(edition) {
+        const versions = {
+            paper: ['1.21.1', '1.21', '1.20.4', '1.20.1', '1.19.4'],
+            vanilla: ['1.21.1', '1.21', '1.20.4', '1.20.1', '1.19.4'],
+            fabric: ['1.21.1', '1.21', '1.20.4', '1.20.1', '1.19.4'],
+            forge: ['1.21.1', '1.21', '1.20.4', '1.20.1', '1.19.4']
+        };
+        
+        return versions[edition] || [];
     }
 }
 
