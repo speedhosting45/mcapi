@@ -37,6 +37,35 @@ router.get('/health', (req, res) => {
     });
 });
 
+// START SERVER
+router.post('/servers/:serverId/start', async (req, res) => {
+    try {
+        const { serverId } = req.params;
+        const serverConfig = deployEngine.activeServers.get(serverId);
+
+        if (!serverConfig) {
+            return res.status(404).json({ success: false, error: 'Server not found or not deployed yet' });
+        }
+
+        await deployEngine.startServer(
+            serverConfig.directory,
+            serverId,
+            serverConfig.ram,
+            serverConfig.port
+        );
+
+        serverConfig.status = 'running';
+        serverConfig.restartedAt = new Date();
+        deployEngine.activeServers.set(serverId, serverConfig);
+
+        res.json({ success: true, message: `Server ${serverId} started successfully` });
+    } catch (error) {
+        console.error(`❌ Failed to start server ${req.params.serverId}:`, error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+
 //
 // 🚀 DEPLOY SERVER (ADVANCED)
 //
