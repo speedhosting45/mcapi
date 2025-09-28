@@ -38,6 +38,7 @@ router.get('/health', (req, res) => {
 });
 
 // Deploy a new server
+// Deploy a new server
 router.post('/deploy', async (req, res) => {
     try {
         const { 
@@ -75,6 +76,18 @@ router.post('/deploy', async (req, res) => {
 
         const serverId = `mc-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
 
+        // IMMEDIATE RESPONSE WITH SERVER ID
+        res.json({ 
+            success: true, 
+            serverId, 
+            status: 'deploying',
+            message: 'Server deployment started successfully',
+            progressUrl: `/api/servers/${serverId}/progress`,
+            logsUrl: `/api/servers/${serverId}/logs/live`,
+            commandUrl: `/api/servers/${serverId}/command`
+        });
+
+        // Continue deployment in background (non-blocking)
         const deployConfig = {
             serverId,
             edition: edition.toLowerCase(),
@@ -103,13 +116,10 @@ router.post('/deploy', async (req, res) => {
             loadingScreen: loadingScreen || { enabled: true, type: 'default' }
         };
 
-        const result = await deployEngine.deployServer(deployConfig);
-        
-        if (result.success) {
-            res.json(result);
-        } else {
-            res.status(500).json(result);
-        }
+        // Start deployment in background
+        deployEngine.deployServer(deployConfig).catch(error => {
+            console.error(`Background deployment failed for ${serverId}:`, error);
+        });
 
     } catch (error) {
         console.error('Deployment error:', error);
