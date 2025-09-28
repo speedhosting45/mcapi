@@ -238,7 +238,7 @@ class DeployEngine {
             
             // Fabric URLs
             'fabric-1.21.1': 'https://meta.fabricmc.net/v2/versions/loader/1.21.1/0.15.7/0.15.7/server/jar',
-            'fabric-1.21': 'https://meta.fabricmc.net/v2/versions/loader/1.21/0.15.7/0.15.7/server/jar',
+            'fabric-1.21': 'https://meta.fabricmc.net/v2/versions/loader/1.21/0.16.13/1.1.0/server/jar',
             'fabric-1.20.1': 'https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.15.7/0.15.7/server/jar',
             
             // Forge URLs
