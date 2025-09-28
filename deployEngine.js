@@ -13,6 +13,8 @@ class DeployEngine {
         this.baseDir = process.env.MINECRAFT_BASE_DIR || '/home/servers';
         this.activeServers = new Map();
         this.serverConfigs = new Map();
+        this.deployProgress = new Map(); // Track deployment progress
+        this.logStreams = new Map(); // Track active log streams
     }
 
     // MAIN DEPLOYMENT METHOD
@@ -53,6 +55,7 @@ class DeployEngine {
 
         try {
             console.log(`🚀 Starting deployment: ${serverId} (${edition} ${version})`);
+            this.updateProgress(serverId, 0, 'Starting deployment...');
             
             // Show loading screen simulation
             if (loadingScreen.enabled) {
@@ -61,9 +64,11 @@ class DeployEngine {
 
             // Validate inputs
             await this.validateConfig(deployConfig);
+            this.updateProgress(serverId, 10, 'Configuration validated');
 
             // Check Java installation
             await this.checkJavaInstallation();
+            this.updateProgress(serverId, 15, 'Java verified');
 
             // Create server directory
             const serverDir = path.join(this.baseDir, serverId);
@@ -71,14 +76,17 @@ class DeployEngine {
 
             // Allocate port
             const port = await this.findAvailablePort();
+            this.updateProgress(serverId, 20, `Port ${port} allocated`);
             console.log(`📍 Allocated port: ${port}`);
             
             // Get download URL
             const downloadUrl = await this.getDownloadUrl(edition, version);
+            this.updateProgress(serverId, 30, 'Starting download...');
             console.log(`📥 Downloading from: ${downloadUrl}`);
             
             // Download server jar
             await this.downloadFile(downloadUrl, path.join(serverDir, 'server.jar'));
+            this.updateProgress(serverId, 50, 'Server jar downloaded');
 
             // Create configuration files
             await this.createConfigFiles(serverDir, { 
@@ -88,17 +96,21 @@ class DeployEngine {
                 allowNether, allowEnd, allowFlight, whiteList, enforceWhitelist,
                 enableCommandBlock, onlineMode
             });
+            this.updateProgress(serverId, 60, 'Configuration files created');
 
             // Forge special handling
             if (edition === 'forge') {
                 await this.installForge(serverDir);
+                this.updateProgress(serverId, 70, 'Forge installation completed');
             }
 
             // First run setup
             await this.firstTimeSetup(serverDir, ram);
+            this.updateProgress(serverId, 80, 'First-time setup completed');
 
             // Start server
             await this.startServer(serverDir, serverId, ram, port);
+            this.updateProgress(serverId, 100, 'Server running successfully');
 
             // Save server configuration
             const serverConfig = {
@@ -134,6 +146,7 @@ class DeployEngine {
             };
 
         } catch (error) {
+            this.updateProgress(serverId, 0, `Deployment failed: ${error.message}`);
             console.error(`❌ Deployment failed for ${serverId}:`, error);
             await this.cleanupServer(serverId);
             return { 
@@ -142,6 +155,93 @@ class DeployEngine {
                 message: 'Deployment failed' 
             };
         }
+    }
+
+    // LIVE LOG STREAMING
+    setupLiveLogs(serverId, res) {
+        const serverDir = path.join(this.baseDir, serverId);
+        const logPath = path.join(serverDir, 'server.log');
+        
+        // Store the response object for this stream
+        this.logStreams.set(serverId, res);
+        
+        // Set SSE headers
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*'
+        });
+        
+        let position = 0;
+        
+        const sendLogUpdate = async () => {
+            try {
+                const stats = await fs.stat(logPath);
+                if (stats.size < position) {
+                    position = 0; // Log file was rotated
+                }
+                
+                if (stats.size > position) {
+                    const fd = await fs.open(logPath, 'r');
+                    const buffer = Buffer.alloc(stats.size - position);
+                    await fd.read(buffer, 0, stats.size - position, position);
+                    await fd.close();
+                    
+                    const newLines = buffer.toString('utf8');
+                    res.write(`data: ${JSON.stringify({ lines: newLines, timestamp: new Date().toISOString() })}\n\n`);
+                    
+                    position = stats.size;
+                }
+            } catch (error) {
+                console.error('Log streaming error:', error);
+            }
+        };
+        
+        // Initial read of existing logs
+        sendLogUpdate();
+        
+        // Watch for new logs every second
+        const interval = setInterval(sendLogUpdate, 1000);
+        
+        // Cleanup on client disconnect
+        res.on('close', () => {
+            clearInterval(interval);
+            this.logStreams.delete(serverId);
+            console.log(`📊 Live logs disconnected for server: ${serverId}`);
+        });
+    }
+
+    // TERMINAL COMMAND EXECUTION
+    async executeCommand(serverId, command) {
+        try {
+            // Sanitize dangerous commands
+            const dangerousCommands = ['rm', 'sudo', 'sh', 'bash', '>', '|', '&', ';', '`', '$', '../'];
+            if (dangerousCommands.some(cmd => command.includes(cmd))) {
+                throw new Error('Potentially dangerous command rejected');
+            }
+            
+            // Method 1: Send to screen session
+            const screenCmd = `screen -S ${serverId} -p 0 -X stuff "${command.replace(/"/g, '\\"')}\\n"`;
+            await execAsync(screenCmd);
+            
+            console.log(`✅ Command executed on server ${serverId}: ${command}`);
+            return { success: true, command, message: 'Command executed successfully' };
+            
+        } catch (error) {
+            console.error(`❌ Failed to execute command on server ${serverId}:`, error);
+            throw error;
+        }
+    }
+
+    // DEPLOYMENT PROGRESS TRACKING
+    updateProgress(serverId, percent, message) {
+        this.deployProgress.set(serverId, { percent, message, timestamp: new Date() });
+        console.log(`📊 [${serverId}] ${percent}% - ${message}`);
+    }
+
+    getProgress(serverId) {
+        return this.deployProgress.get(serverId) || { percent: 0, message: 'Not found' };
     }
 
     // VALIDATION
@@ -238,7 +338,7 @@ class DeployEngine {
             
             // Fabric URLs
             'fabric-1.21.1': 'https://meta.fabricmc.net/v2/versions/loader/1.21.1/0.15.7/0.15.7/server/jar',
-            'fabric-1.21': 'https://meta.fabricmc.net/v2/versions/loader/1.21/0.16.13/1.1.0/server/jar',
+            'fabric-1.21': 'https://meta.fabricmc.net/v2/versions/loader/1.21/0.15.7/0.15.7/server/jar',
             'fabric-1.20.1': 'https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.15.7/0.15.7/server/jar',
             
             // Forge URLs
