@@ -38,17 +38,27 @@ router.get('/health', (req, res) => {
 });
 
 // START SERVER
+// START SERVER (Improved)
 router.post('/servers/:serverId/start', async (req, res) => {
     try {
         const { serverId } = req.params;
-        const serverConfig = deployEngine.activeServers.get(serverId);
+        let serverConfig = deployEngine.activeServers.get(serverId);
 
+        // 📝 If not found in memory, try loading from server.config.json
         if (!serverConfig) {
-            return res.status(404).json({ success: false, error: 'Server not found or not deployed yet' });
+            const serverDir = path.join(process.env.MINECRAFT_BASE_DIR || '/home/servers', serverId);
+            const configPath = path.join(serverDir, 'server.config.json');
+
+            try {
+                const rawConfig = await fs.readFile(configPath, 'utf8');
+                serverConfig = JSON.parse(rawConfig);
+            } catch (e) {
+                return res.status(404).json({ success: false, error: 'Server not found or not deployed yet' });
+            }
         }
 
         await deployEngine.startServer(
-            serverConfig.directory,
+            serverConfig.directory || path.join(process.env.MINECRAFT_BASE_DIR || '/home/servers', serverId),
             serverId,
             serverConfig.ram,
             serverConfig.port
@@ -58,7 +68,8 @@ router.post('/servers/:serverId/start', async (req, res) => {
         serverConfig.restartedAt = new Date();
         deployEngine.activeServers.set(serverId, serverConfig);
 
-        res.json({ success: true, message: `Server ${serverId} started successfully` });
+        res.json({ success: true, message: `✅ Server ${serverId} started successfully` });
+
     } catch (error) {
         console.error(`❌ Failed to start server ${req.params.serverId}:`, error);
         res.status(500).json({ success: false, error: error.message });
